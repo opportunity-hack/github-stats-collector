@@ -1,0 +1,37 @@
+# GitHub API client
+PyGithub==1.59.0
+
+# Firestore client
+google-cloud-firestore==2.11.1
+
+# Environment variable management
+python-dotenv==1.0.0
+
+# Asynchronous programming
+aiohttp==3.8.5
+
+# Scheduling
+schedule==1.2.0
+
+# Date parsing
+python-dateutil==2.8.2
+
+# Data manipulation
+pandas==2.0.3
+
+# Progress bars for long-running tasks
+tqdm==4.66.1
+
+# Testing
+pytest==7.4.0
+pytest-asyncio==0.21.1
+
+# Linting and formatting
+flake8==6.1.0
+black==23.7.0
+
+# Type checking
+mypy==1.5.1
+
+# Logging
+structlog==23.1.0
