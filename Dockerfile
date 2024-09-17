@@ -27,4 +27,4 @@ RUN useradd -m appuser
 USER appuser
 
 # Run the scheduler
-CMD ["python", "src/scheduler.py"]
+CMD ["python", "src/scheduler.py", "opportunity-hack"]
