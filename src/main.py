@@ -1,40 +1,62 @@
 import asyncio
 import logging
-from config import load_config
+import argparse
 from github_client import GitHubClient
 from firestore_client import FirestoreClient
 from metrics_collector import MetricsCollector
+import os
+from dotenv import load_dotenv
 
 # Set up logging
-#logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
+# Load environment variables
+load_dotenv()
+
+async def process_organization(org_name: str, github_token: str, firestore_credentials: str):
+    github_client = None
+    firestore_client = None
+    try:
+        github_client = GitHubClient(github_token)
+        firestore_client = FirestoreClient(firestore_credentials)
+        metrics_collector = MetricsCollector(github_client, firestore_client)
+
+        await metrics_collector.process_organization(org_name)
+        
+        # Get and print top contributors
+        top_contributors = await metrics_collector.get_top_contributors(org_name)
+        logger.info(f"Top contributors for {org_name}:")
+        for contributor in top_contributors:
+            logger.info(f"{contributor['login']}: {contributor.get('total_commits', 0)} commits, {contributor.get('total_prs', 0)} PRs")
+    
+    except Exception as e:
+        logger.error(f"Error processing organization {org_name}: {str(e)}")
+    finally:
+        if github_client:
+            await github_client.close()
+        if firestore_client:
+            await firestore_client.close()
 
 async def main():
-    try:
-        # Load configuration
-        config = load_config()
-        logger.info("Configuration loaded successfully")
+    parser = argparse.ArgumentParser(description="GitHub Organization Stats Collector")
+    parser.add_argument("org_names", nargs="+", help="Names of the GitHub organizations to process")
+    args = parser.parse_args()
 
-        # Initialize clients
-        async with GitHubClient(config.github_token, recent_activity_count=5) as github_client:
-            firestore_client = FirestoreClient(config.google_credentials)
-            collector = MetricsCollector(github_client, firestore_client)
+    github_token = os.getenv("GITHUB_TOKEN")
+    firestore_credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 
-            # Process each organization
-            for org_name in config.github_orgs.split(','):
-                logger.info(f"Starting to process organization: {org_name}")
-                await collector.process_organization(org_name)
+    if not github_token:
+        logger.error("GITHUB_TOKEN environment variable is not set")
+        return
+    
+    if not firestore_credentials:
+        logger.error("GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable is not set")
+        return
 
-                # Get and print top contributors
-                top_contributors = await collector.get_top_contributors(org_name)
-                logger.info(f"Top contributors for {org_name}:")
-                for contributor in top_contributors:
-                    logger.info(f"{contributor['login']}: {contributor['contribution_score']}")
-
-    except Exception as e:
-        logger.error(f"An error occurred in the main process: {str(e)}")
+    tasks = [process_organization(org_name, github_token, firestore_credentials) for org_name in args.org_names]
+    
+    await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
     asyncio.run(main())

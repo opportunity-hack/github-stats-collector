@@ -35,3 +35,5 @@ mypy==1.5.1
 
 # Logging
 structlog==23.1.0
+
+gql[aiohttp]==3.5.0

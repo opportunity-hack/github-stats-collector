@@ -1,177 +1,126 @@
+import aiohttp
 import asyncio
 from typing import List, Dict, Any
-from github import Github
-from github.Repository import Repository
-from github.NamedUser import NamedUser
-import aiohttp
 import logging
-import re
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 class GitHubClient:
-    def __init__(self, token: str, recent_activity_count: int = 5):
-        self.github = Github(token)
-        self.session = aiohttp.ClientSession(headers={"Authorization": f"token {token}"})
-        self.recent_activity_count = recent_activity_count
+    def __init__(self, token: str):
+        self.token = token
+        self.base_url = "https://api.github.com"
+        self.headers = {
+            "Authorization": f"token {self.token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        self.session = None
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        await self.close()
+    async def ensure_session(self):
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession(headers=self.headers)
 
     async def close(self):
-        await self.session.close()
+        if self.session and not self.session.closed:
+            await self.session.close()
 
-    async def get_organization_repos(self, org_name: str) -> List[Repository]:
-        """Fetch all repositories for a given organization."""
-        org = self.github.get_organization(org_name)
-        repos = org.get_repos()
-        return [repo async for repo in self._aiter_paginated(repos)]
+    async def get_organization_repos(self, org_name: str) -> List[Dict[str, Any]]:
+        await self.ensure_session()
+        url = f"{self.base_url}/orgs/{org_name}/repos"
+        return await self.get_paginated_data(url)
 
-    async def get_repo_contributors(self, repo: Repository) -> List[NamedUser]:
-        """Fetch all contributors for a given repository."""
-        contributors = repo.get_contributors()
-        return [contributor async for contributor in self._aiter_paginated(contributors)]
+    async def get_repo_contributors(self, repo_full_name: str) -> List[Dict[str, Any]]:
+        await self.ensure_session()
+        url = f"{self.base_url}/repos/{repo_full_name}/contributors"
+        return await self.get_paginated_data(url)
 
-    async def get_contributor_stats(self, repo: Repository, contributor: NamedUser) -> Dict[str, Any]:
-        """Fetch statistics and recent activity for a given contributor in a repository."""
+    async def get_contributor_stats(self, org_name: str, repo_name: str, contributor_login: str) -> Dict[str, Any]:
+        await self.ensure_session()
+        repo_full_name = f"{org_name}/{repo_name}"
+        
         stats = {
-            "login": contributor.login,
-            "name": contributor.name,
-            "repo_name": repo.name,
-            "repo_full_name": repo.full_name,
+            "login": contributor_login,
+            "org_name": org_name,
+            "repo_name": repo_name,
+            "commits": 0,
+            "additions": 0,
+            "deletions": 0,
+            "pull_requests": {
+                "total": 0,
+                "open": 0,
+                "closed": 0,
+                "merged": 0
+            },
+            "issues": {
+                "total": 0,
+                "open": 0,
+                "closed": 0
+            },
+            "reviews": 0
         }
 
-        # Fetch counts and recent activity asynchronously
-        tasks = [
-            self._fetch_commit_data(repo, contributor),
-            self._fetch_pr_data(repo, contributor),
-            self._fetch_issue_data(repo, contributor),
-            self._fetch_review_data(repo, contributor),
-        ]
-        commit_data, pr_data, issue_data, review_data = await asyncio.gather(*tasks)
+        # Fetch commit stats
+        commits_url = f"{self.base_url}/repos/{repo_full_name}/commits"
+        commits = await self.get_paginated_data(commits_url, params={"author": contributor_login, "per_page": 100})
+        stats["commits"] = len(commits)
 
-        stats.update({
-            "commit_count": commit_data["count"],
-            "pr_count": pr_data["count"],
-            "issue_count": issue_data["count"],
-            "review_count": review_data["count"],
-            "recent_commits": commit_data["recent"],
-            "recent_prs": pr_data["recent"],
-            "recent_issues": issue_data["recent"],
-            "recent_reviews": review_data["recent"],
-        })
+        for commit in commits:
+            if "stats" in commit:
+                stats["additions"] += commit["stats"].get("additions", 0)
+                stats["deletions"] += commit["stats"].get("deletions", 0)
 
-        logger.debug(f"Fetched stats for {contributor.login} in {repo.full_name}: {stats}")
+        # Fetch PR stats
+        prs_url = f"{self.base_url}/repos/{repo_full_name}/pulls"
+        prs = await self.get_paginated_data(prs_url, params={"state": "all", "creator": contributor_login, "per_page": 100})
+        stats["pull_requests"]["total"] = len(prs)
+        stats["pull_requests"]["open"] = sum(1 for pr in prs if pr["state"] == "open")
+        stats["pull_requests"]["closed"] = sum(1 for pr in prs if pr["state"] == "closed" and not pr["merged_at"])
+        stats["pull_requests"]["merged"] = sum(1 for pr in prs if pr["merged_at"])
+
+        # Fetch issue stats
+        issues_url = f"{self.base_url}/repos/{repo_full_name}/issues"
+        issues = await self.get_paginated_data(issues_url, params={"state": "all", "creator": contributor_login, "per_page": 100})
+        stats["issues"]["total"] = len(issues)
+        stats["issues"]["open"] = sum(1 for issue in issues if issue["state"] == "open")
+        stats["issues"]["closed"] = sum(1 for issue in issues if issue["state"] == "closed")
+
+        # Fetch review stats
+        reviews = await self.get_pr_reviews(repo_full_name, contributor_login)
+        stats["reviews"] = len(reviews)
+
         return stats
 
-    async def _aiter_paginated(self, paginated):
-        """Asynchronous iterator for PaginatedList."""
-        for item in paginated:
-            yield item
-            await asyncio.sleep(0)  # Allow other coroutines to run
-
-    def _parse_link_header(self, link_header: str) -> int:
-        """Parse the Link header to get the total count."""
-        if not link_header:
-            return 0
-        match = re.search(r'page=(\d+)>; rel="last"', link_header)
-        if match:
-            return int(match.group(1))
-        return 0
-
-    async def _fetch_data(self, url: str, params: Dict[str, Any], entity_type: str, repo: Repository, contributor: NamedUser) -> Dict[str, Any]:
-        """Generic method to fetch count and recent activity for different entities."""
-        async with self.session.get(url, params=params) as response:
-            if response.status == 200:
-                total_count = response.headers.get("X-Total-Count")
-                if total_count:
-                    count = int(total_count)
-                else:
-                    count = self._parse_link_header(response.headers.get("Link", ""))
-                
-                data = await response.json()
-                recent = [self._format_activity(item, entity_type) for item in data[:self.recent_activity_count]]
-                
-                logger.debug(f"{entity_type.capitalize()} data for {contributor.login} in {repo.full_name}: count={count}, recent={len(recent)}")
-                return {"count": count, "recent": recent}
-            else:
-                logger.error(f"Failed to fetch {entity_type} data for {contributor.login} in {repo.full_name}: {response.status}")
-                return {"count": 0, "recent": []}
-
-    def _format_activity(self, item: Dict[str, Any], entity_type: str) -> Dict[str, Any]:
-        """Format the activity data based on the entity type."""
-        if entity_type == "commit":
-            return {
-                "sha": item["sha"],
-                "message": item["commit"]["message"],
-                "url": item["html_url"],
-                "date": item["commit"]["author"]["date"],
-            }
-        elif entity_type in ["pr", "issue"]:
-            return {
-                "number": item["number"],
-                "title": item["title"],
-                "url": item["html_url"],
-                "state": item["state"],
-                "created_at": item["created_at"],
-            }
-        elif entity_type == "review":
-            return {
-                "id": item["id"],
-                "state": item["state"],
-                "body": item.get("body", ""),
-                "url": item["html_url"],
-                "submitted_at": item["submitted_at"],
-                "pr_number": item["pull_request_url"].split("/")[-1],
-            }
-        return item
-
-    async def _fetch_commit_data(self, repo: Repository, contributor: NamedUser) -> Dict[str, Any]:
-        """Fetch the total number of commits and recent commits for a contributor in a repository."""
-        url = f"https://api.github.com/repos/{repo.full_name}/commits"
-        params = {"author": contributor.login, "per_page": self.recent_activity_count}
-        return await self._fetch_data(url, params, "commit", repo, contributor)
-
-    async def _fetch_pr_data(self, repo: Repository, contributor: NamedUser) -> Dict[str, Any]:
-        """Fetch the total number of pull requests and recent PRs for a contributor in a repository."""
-        url = f"https://api.github.com/repos/{repo.full_name}/pulls"
-        params = {"state": "all", "creator": contributor.login, "per_page": self.recent_activity_count}
-        return await self._fetch_data(url, params, "pr", repo, contributor)
-
-    async def _fetch_issue_data(self, repo: Repository, contributor: NamedUser) -> Dict[str, Any]:
-        """Fetch the total number of issues and recent issues for a contributor in a repository."""
-        url = f"https://api.github.com/repos/{repo.full_name}/issues"
-        params = {"state": "all", "creator": contributor.login, "per_page": self.recent_activity_count}
-        return await self._fetch_data(url, params, "issue", repo, contributor)
-
-    async def _fetch_review_data(self, repo: Repository, contributor: NamedUser) -> Dict[str, Any]:
-        """Fetch the total number of reviews and recent reviews for a contributor in a repository."""
-        url = f"https://api.github.com/repos/{repo.full_name}/pulls"
-        params = {"state": "all", "per_page": 100}  # Fetch more PRs to increase chances of finding reviews
+    async def get_pr_reviews(self, repo_full_name: str, contributor_login: str) -> List[Dict[str, Any]]:
+        await self.ensure_session()
+        prs_url = f"{self.base_url}/repos/{repo_full_name}/pulls"
+        prs = await self.get_paginated_data(prs_url, params={"state": "all", "per_page": 100})
         
-        all_reviews = []
-        async with self.session.get(url, params=params) as response:
-            if response.status == 200:
-                prs = await response.json()
-                for pr in prs:
-                    review_url = f"https://api.github.com/repos/{repo.full_name}/pulls/{pr['number']}/reviews"
-                    async with self.session.get(review_url) as review_response:
-                        if review_response.status == 200:
-                            reviews = await review_response.json()
-                            contributor_reviews = [r for r in reviews if r['user']['login'] == contributor.login]
-                            all_reviews.extend(contributor_reviews)
-                            if len(all_reviews) >= self.recent_activity_count:
-                                break
-                
-                count = len(all_reviews)
-                recent = [self._format_activity(review, "review") for review in all_reviews[:self.recent_activity_count]]
-                
-                logger.debug(f"Review data for {contributor.login} in {repo.full_name}: count={count}, recent={len(recent)}")
-                return {"count": count, "recent": recent}
-            else:
-                logger.error(f"Failed to fetch review data for {contributor.login} in {repo.full_name}: {response.status}")
-                return {"count": 0, "recent": []}
+        reviews = []
+        for pr in prs:
+            reviews_url = f"{self.base_url}/repos/{repo_full_name}/pulls/{pr['number']}/reviews"
+            pr_reviews = await self.get_paginated_data(reviews_url, params={"per_page": 100})
+            reviews.extend([review for review in pr_reviews if review['user']['login'] == contributor_login])
+        
+        return reviews
+
+    async def get_paginated_data(self, url: str, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        await self.ensure_session()
+        if params is None:
+            params = {}
+        
+        all_data = []
+        page = 1
+        while True:
+            params['page'] = page
+            async with self.session.get(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if not data:
+                        break
+                    all_data.extend(data)
+                    if len(data) < params.get('per_page', 30):
+                        break
+                    page += 1
+                else:
+                    logger.error(f"Error fetching data from {url}: {response.status}")
+                    break
+        return all_data
