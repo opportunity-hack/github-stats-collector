@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for git-code-stats-collector-prod-proud-dew-626 on 2024-09-09T20:36:52-07:00
+# fly.toml app configuration file generated for git-code-stats-collector-prod-empty-leaf-8186 on 2024-09-18T21:47:17-07:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'git-code-stats-collector-prod-proud-dew-626'
+app = 'git-code-stats-collector-prod-empty-leaf-8186'
 primary_region = 'lax'
 
 [build]
@@ -20,7 +20,7 @@ primary_region = 'lax'
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
   processes = ['app']
 
 [[vm]]

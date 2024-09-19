@@ -14,6 +14,7 @@ class FirestoreClient:
             credentials = service_account.Credentials.from_service_account_info(credentials_dict)
             self.db = firestore.AsyncClient(credentials=credentials)
             self.orgs_collection = self.db.collection('github_organizations')
+            logger.info("Firestore client initialized successfully")
         except json.JSONDecodeError as e:
             logger.error(f"Error decoding credentials JSON: {str(e)}")
             raise
@@ -77,7 +78,11 @@ class FirestoreClient:
         if self.db:
             try:
                 await self.db.close()
+                logger.info("Firestore client closed successfully")
             except Exception as e:
-                logger.error(f"Error closing Firestore client: {str(e)}")
                 import traceback
                 traceback.print_exc()
+                logger.error(f"Error closing Firestore client: {str(e)}")
+        else:
+            logger.warning("Attempted to close Firestore client, but it was not initialized")
+                
