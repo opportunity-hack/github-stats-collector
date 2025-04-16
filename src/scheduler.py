@@ -69,9 +69,14 @@ class Scheduler:
 
     def schedule_job(self):
         """Schedule the metrics collection job based on the collection interval."""
-        if self.collection_interval == 'hourly':
-            schedule.every().hour.at(self.collection_time[-2:]).do(self.run_collection_wrapper)
-            logger.info(f"Scheduled metrics collection to run every hour at {self.collection_time[-2:]} minutes past the hour")
+        if self.collection_interval == 'minutely':
+            logger.info(f"Scheduling metrics collection to run every {self.collection_time} minutes")
+            schedule.every(int(self.collection_time)).minutes.do(self.run_collection_wrapper)
+            logger.info(f"Scheduled metrics collection to run every {self.collection_time} minutes")            
+        elif self.collection_interval == 'hourly':
+            logger.info(f"Scheduling metrics collection to run every hour at {self.collection_time} minutes past the hour")
+            schedule.every().hour.at(self.collection_time).do(self.run_collection_wrapper)
+            logger.info(f"Scheduled metrics collection to run every hour at {self.collection_time} minutes past the hour")
         elif self.collection_interval == 'daily':
             schedule.every().day.at(self.collection_time).do(self.run_collection_wrapper)
             logger.info(f"Scheduled metrics collection to run daily at {self.collection_time}")
