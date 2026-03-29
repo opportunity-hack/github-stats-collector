@@ -1,12 +1,13 @@
 import aiohttp
 import asyncio
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Set
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
 class GitHubClient:
-    def __init__(self, token: str):
+    def __init__(self, token: str, ignored_users: Set[str] = None):
         self.token = token
         self.base_url = "https://api.github.com"
         self.headers = {
@@ -14,6 +15,8 @@ class GitHubClient:
             "Accept": "application/vnd.github.v3+json"
         }
         self.session = None
+        self.ignored_users = ignored_users or set()
+        logger.info(f"GitHubClient initialized with {len(self.ignored_users)} ignored users: {self.ignored_users}")
 
     async def ensure_session(self):
         if self.session is None or self.session.closed:
@@ -31,7 +34,19 @@ class GitHubClient:
     async def get_repo_contributors(self, repo_full_name: str) -> List[Dict[str, Any]]:
         await self.ensure_session()
         url = f"{self.base_url}/repos/{repo_full_name}/contributors"
-        return await self.get_paginated_data(url)
+        contributors = await self.get_paginated_data(url)
+        
+        # Filter out ignored users
+        filtered_contributors = [
+            contributor for contributor in contributors 
+            if contributor.get('login') not in self.ignored_users
+        ]
+        
+        if len(contributors) != len(filtered_contributors):
+            ignored_count = len(contributors) - len(filtered_contributors)
+            logger.info(f"Filtered out {ignored_count} ignored contributors from {repo_full_name}")
+        
+        return filtered_contributors
 
     async def get_contributor_stats(self, org_name: str, repo_name: str, contributor_login: str) -> Dict[str, Any]:
         await self.ensure_session()
