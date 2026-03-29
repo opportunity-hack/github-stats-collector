@@ -8,6 +8,10 @@ primary_region = 'lax'
 
 [build]
 
+[[mounts]]
+  source = 'github_stats_data'
+  destination = '/data'
+
 [processes]
   app = "python src/scheduler.py 2026-ASU-WiCS-Opportunity-Hack"
 
