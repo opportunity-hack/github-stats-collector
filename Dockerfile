@@ -27,4 +27,4 @@ RUN useradd -m appuser
 USER appuser
 
 # Run the scheduler
-CMD ["python", "src/scheduler.py", "2024-Arizona-Opportunity-Hack"]
+CMD ["python", "src/scheduler.py", "2026-ASU-WiCS-Opportunity-Hack"]

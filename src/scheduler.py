@@ -31,10 +31,14 @@ class Scheduler:
         self.github_client = None
         self.firestore_client = None
         self.metrics_collector = None
+        
+        # Parse ignored users from environment variable
+        ignored_users_str = os.getenv("GITHUB_IGNORED_USERS", "gregv")
+        self.ignored_users = set(user.strip() for user in ignored_users_str.split(",") if user.strip())
 
     async def setup(self):
         """Set up the clients and collector."""
-        self.github_client = GitHubClient(self.github_token)
+        self.github_client = GitHubClient(self.github_token, self.ignored_users)
         self.firestore_client = FirestoreClient(self.firestore_credentials)
         self.metrics_collector = MetricsCollector(self.github_client, self.firestore_client)
 

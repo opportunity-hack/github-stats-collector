@@ -19,7 +19,11 @@ async def process_organization(org_name: str, github_token: str, firestore_crede
     github_client = None
     firestore_client = None
     try:
-        github_client = GitHubClient(github_token)
+        # Parse ignored users from environment variable
+        ignored_users_str = os.getenv("GITHUB_IGNORED_USERS", "gregv")
+        ignored_users = set(user.strip() for user in ignored_users_str.split(",") if user.strip())
+        
+        github_client = GitHubClient(github_token, ignored_users)
         firestore_client = FirestoreClient(firestore_credentials)
         metrics_collector = MetricsCollector(github_client, firestore_client)
 
@@ -50,7 +54,11 @@ async def get_achievements(org_name: str, github_token: str, firestore_credentia
     github_client = None
     firestore_client = None
     try:
-        github_client = GitHubClient(github_token)
+        # Parse ignored users from environment variable
+        ignored_users_str = os.getenv("GITHUB_IGNORED_USERS", "gregv")
+        ignored_users = set(user.strip() for user in ignored_users_str.split(",") if user.strip())
+        
+        github_client = GitHubClient(github_token, ignored_users)
         firestore_client = FirestoreClient(firestore_credentials)
         metrics_collector = MetricsCollector(github_client, firestore_client)
         

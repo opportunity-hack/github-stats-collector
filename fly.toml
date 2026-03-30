@@ -8,27 +8,15 @@ primary_region = 'lax'
 
 [build]
 
-[env]
-  PORT = '8080'
-
 [[mounts]]
   source = 'github_stats_data'
   destination = '/data'
 
-[http_service]
-  internal_port = 8080
-  force_https = true
-  auto_stop_machines = 'stop'
-  auto_start_machines = true
-  min_machines_running = 1
-  processes = ['app']
+[processes]
+  app = "python src/scheduler.py 2026-ASU-WiCS-Opportunity-Hack"
 
 [[vm]]
   size = 'shared-cpu-1x'
   memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
-
-[[metrics]]
-  port = 9091
-  path = '/metrics'
