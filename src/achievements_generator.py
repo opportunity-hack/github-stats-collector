@@ -8,6 +8,8 @@ from collections import defaultdict
 logger = logging.getLogger(__name__)
 
 class AchievementsGenerator:
+    MIN_FILES_FOR_PRODUCTIVE_TEAM = 10
+
     def __init__(self):
         logger.info("AchievementsGenerator initialized")
 
@@ -41,6 +43,9 @@ class AchievementsGenerator:
             # Generate team achievements
             achievements.extend(self._find_most_productive_team(org_name, repos_data, contributors_data))
             achievements.extend(self._find_most_collaborative_team(org_name, repos_data, contributors_data))
+
+            # Generate mentor opportunity entries for teams that could use support
+            achievements.extend(self._find_teams_ready_for_boost(org_name, repos_data, contributors_data))
             
             logger.info(f"Generated {len(achievements)} achievements for {org_name}")
             return achievements
@@ -128,7 +133,7 @@ class AchievementsGenerator:
                     },
                     "value": formatted_size,
                     "icon": "merge",
-                    "description": "Largest pull request merged",
+                    "description": "Largest merged PR by lines added + deleted",
                     "repo": largest_pr_repo,
                     "prNumber": str(largest_pr_number) if largest_pr_number else ""
                 }]
@@ -173,9 +178,9 @@ class AchievementsGenerator:
                         "team": latest_contributor.get('team', ""),
                         "githubUsername": latest_contributor['login']
                     },
-                    "value": latest_total_commits,
+                    "value": f"{latest_total_commits} commits",
                     "icon": "accessTime",
-                    "description": "Most commits made at night",
+                    "description": "Commits between 10pm–4am MST",
                     "repo": latest_repo                    
                 }]
             return []
@@ -209,7 +214,7 @@ class AchievementsGenerator:
                     },
                     "value": formatted_deletions,
                     "icon": "delete",
-                    "description": "Most code deleted",
+                    "description": "Most lines of code removed across commits",
                     "repo": max_deletion_repo
                 }]
             return []
@@ -239,9 +244,9 @@ class AchievementsGenerator:
                         "team": max_pr_contributor.get('team', ""),
                         "githubUsername": max_pr_contributor['login']
                     },
-                    "value": str(max_prs),
+                    "value": f"{max_prs} PRs",
                     "icon": "pull_request",
-                    "description": "Most PRs created",
+                    "description": "Most pull requests created",
                     "repo": max_pr_repo
                 }]
             return []
@@ -271,9 +276,9 @@ class AchievementsGenerator:
                         "team": max_issue_contributor.get('team', ""),
                         "githubUsername": max_issue_contributor['login']
                     },
-                    "value": str(max_issues_closed),
+                    "value": f"{max_issues_closed} issues",
                     "icon": "task_alt",
-                    "description": "Most issues closed",
+                    "description": "Most GitHub issues closed",
                     "repo": max_issue_repo
                 }]
             return []
@@ -304,9 +309,9 @@ class AchievementsGenerator:
                         "team": max_review_contributor.get('team', ""),
                         "githubUsername": max_review_contributor['login']
                     },
-                    "value": str(max_reviews),
+                    "value": f"{max_reviews} reviews",
                     "icon": "rate_review",
-                    "description": "Most PR reviews submitted",
+                    "description": "Most pull request reviews submitted",
                     "repo": max_review_repo
                 }]
             return []
@@ -336,9 +341,9 @@ class AchievementsGenerator:
                         "team": max_weekend_contributor.get('team', ""),
                         "githubUsername": max_weekend_contributor['login']
                     },
-                    "value": str(max_weekend_commits),
+                    "value": f"{max_weekend_commits} commits",
                     "icon": "weekend",
-                    "description": "Most commits on weekends",
+                    "description": "Most commits on Saturday & Sunday",
                     "repo": max_weekend_repo
                 }]
             return []
@@ -407,16 +412,19 @@ class AchievementsGenerator:
                 tasks_completed = 0
                 members_count = len(team_members)
                 
+                files_changed = 0
                 for member in team_members:
                     # Count completed tasks (commits + PRs merged + issues closed)
                     tasks_completed += member.get('commits', 0)
                     tasks_completed += member.get('pull_requests', {}).get('merged', 0)
                     tasks_completed += member.get('issues', {}).get('closed', 0)
-                
-                if tasks_completed > 0 and members_count > 0:
+                    files_changed += member.get('unique_files_changed', 0)
+
+                if tasks_completed > 0 and members_count > 0 and files_changed >= self.MIN_FILES_FOR_PRODUCTIVE_TEAM:
                     team_productivity[team_name] = {
                         "tasks": tasks_completed,
                         "members": members_count,
+                        "files_changed": files_changed,
                         "members_data": team_members
                     }
             
@@ -436,7 +444,8 @@ class AchievementsGenerator:
                 "value": f"{team_data['tasks']} tasks",
                 "icon": "group",
                 "members": team_data["members"],
-                "description": "Completed the most tasks during the hackathon",
+                "filesChanged": team_data["files_changed"],
+                "description": "Most commits + merged PRs + issues closed",
                 "teamPage": team_page
             }]
         except Exception as e:
@@ -493,9 +502,47 @@ class AchievementsGenerator:
                 "value": f"{team_data['collaboration']} PRs reviewed",
                 "icon": "merge",
                 "members": team_data["members"],
-                "description": "Highest number of PR reviews and comments",
+                "description": "Highest number of pull request reviews",
                 "teamPage": team_page
             }]
         except Exception as e:
             logger.error(f"Error finding most collaborative team achievement: {str(e)}")
+            return []
+
+    def _find_teams_ready_for_boost(self, org_name: str, repos_data: Dict[str, Any], contributors_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Find teams with low GitHub activity so mentors can offer support."""
+        try:
+            teams = defaultdict(list)
+            for contributor in contributors_data:
+                team = contributor.get('team')
+                if team:
+                    teams[team].append(contributor)
+
+            if not teams:
+                return []
+
+            boost_teams = []
+            for team_name, team_members in teams.items():
+                total_commits = sum(member.get('commits', 0) for member in team_members)
+                files_changed = sum(member.get('unique_files_changed', 0) for member in team_members)
+                members_count = len(team_members)
+
+                if files_changed < self.MIN_FILES_FOR_PRODUCTIVE_TEAM or total_commits < 5:
+                    team_page = team_name.lower().replace(' ', '-')
+                    boost_teams.append({
+                        "title": "Ready for a Boost",
+                        "team": team_name,
+                        "value": f"{files_changed} files, {total_commits} commits",
+                        "icon": "rocket_launch",
+                        "members": members_count,
+                        "filesChanged": files_changed,
+                        "description": "This team might benefit from some mentor guidance to get rolling!",
+                        "teamPage": team_page,
+                        "type": "mentor_opportunity"
+                    })
+
+            logger.info(f"Found {len(boost_teams)} teams ready for a boost in {org_name}")
+            return boost_teams
+        except Exception as e:
+            logger.error(f"Error finding teams ready for boost: {str(e)}")
             return []

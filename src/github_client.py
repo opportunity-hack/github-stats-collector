@@ -4,6 +4,15 @@ from typing import List, Dict, Any, Set
 import logging
 import os
 
+# Files and extensions excluded from unique_files_changed count
+# These are boilerplate/docs that don't represent substantive code work
+EXCLUDED_FILENAMES = {
+    "README.md", "CLAUDE.md", "LICENSE", "LICENSE.md",
+    ".gitignore", ".gitattributes", "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md", "CHANGELOG.md",
+}
+EXCLUDED_EXTENSIONS = {".md", ".txt", ".lock"}
+
 logger = logging.getLogger(__name__)
 
 class GitHubClient:
@@ -56,6 +65,7 @@ class GitHubClient:
             "login": contributor_login,
             "org_name": org_name,
             "repo_name": repo_name,
+            "team": repo_name,
             "commits": 0,
             "additions": 0,
             "deletions": 0,
@@ -81,6 +91,7 @@ class GitHubClient:
             "latest_commit_time": None,
             "latest_commit_id": None,
             "largest_pr": None,
+            "unique_files_changed": 0,
             "avatar_url": None,
             "name": None
         }
@@ -179,10 +190,38 @@ class GitHubClient:
                 stats["latest_commit_id"] = last_commit["sha"]
                 
 
-        for commit in commits:
-            if "stats" in commit:
-                stats["additions"] += commit["stats"].get("additions", 0)
-                stats["deletions"] += commit["stats"].get("deletions", 0)
+        # Fetch individual commit details for accurate stats and file tracking
+        # The list-commits endpoint doesn't return stats or files
+        unique_files = set()
+        semaphore = asyncio.Semaphore(10)
+
+        async def fetch_commit_detail(sha: str) -> dict | None:
+            async with semaphore:
+                url = f"{self.base_url}/repos/{repo_full_name}/commits/{sha}"
+                try:
+                    async with self.session.get(url) as response:
+                        if response.status == 200:
+                            return await response.json()
+                except Exception as e:
+                    logger.warning(f"Error fetching commit detail {sha}: {str(e)}")
+                return None
+
+        commit_details = await asyncio.gather(
+            *[fetch_commit_detail(c["sha"]) for c in commits]
+        )
+
+        for detail in commit_details:
+            if detail:
+                stats["additions"] += detail.get("stats", {}).get("additions", 0)
+                stats["deletions"] += detail.get("stats", {}).get("deletions", 0)
+                for f in detail.get("files", []):
+                    filename = f.get("filename", "")
+                    basename = os.path.basename(filename)
+                    _, ext = os.path.splitext(basename)
+                    if basename not in EXCLUDED_FILENAMES and ext not in EXCLUDED_EXTENSIONS:
+                        unique_files.add(filename)
+
+        stats["unique_files_changed"] = len(unique_files)
 
         # Fetch PR stats
         prs_url = f"{self.base_url}/repos/{repo_full_name}/pulls"
@@ -213,6 +252,7 @@ class GitHubClient:
                                 "title": pr_data.get("title"),
                                 "additions": pr_data.get("additions", 0),
                                 "deletions": pr_data.get("deletions", 0),
+                                "changed_files": pr_data.get("changed_files", 0),
                                 "merged_at": pr_data.get("merged_at")
                             }
         
